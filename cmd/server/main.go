@@ -1,50 +1,69 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"log"
 	"net"
-	"os"
+	"strings"
+
+	"samyak.go_redis/resp"
 )
 
-// Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
-var _ = net.Listen
-var _ = os.Exit
-
-func handleConnection(conn net.Conn) {
-	defer conn.Close()
-	for {
-		buffer := make([]byte, 1024)
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Error reading from connection: ", err.Error())
-			return
-		}
-		fmt.Printf("Received: %s", string(buffer[:n]))
-		fmt.Println("from", conn.RemoteAddr())
-		conn.Write([]byte("PONG\r\n"))
-	}
-}
-
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
+	ln, err := net.Listen("tcp", ":6380")
 
-	// Uncomment the code below to pass the first stage
-
-	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
-		fmt.Println("Failed to bind to port 8000")
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
+	fmt.Println("Connected to the server on port :6380")
+
 	for {
-		conn, err := l.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection: ", err.Error())
-			os.Exit(1)
+			continue
 		}
 
 		go handleConnection(conn)
 	}
 }
 
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+	fmt.Println("Client connected")
+
+	reader := bufio.NewReader(conn)
+
+	for {
+		parts, err := resp.ReadRESPArray(reader)
+		if err != nil {
+			fmt.Println("Read error:", err)
+			return
+		}
+
+		if len(parts) == 0 {
+			continue
+		}
+
+		cmd := strings.ToUpper(parts[0])
+
+		switch cmd {
+		case "PING":
+			conn.Write([]byte("+PONG\r\n"))
+
+		case "ECHO":
+			if len(parts) < 2 {
+				conn.Write([]byte("$0\r\n\r\n"))
+				continue
+			}
+			arg := parts[1]
+			resp := fmt.Sprintf("$%d\r\n%s\r\n", len(arg), arg)
+			conn.Write([]byte(resp))
+		default:
+			conn.Write([]byte("unknown command"))
+
+		}
+
+	}
+}
