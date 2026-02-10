@@ -7,7 +7,9 @@ import (
 	"net"
 	"strings"
 
+	"samyak.go_redis/commands"
 	"samyak.go_redis/resp"
+	"samyak.go_redis/store"
 )
 
 func main() {
@@ -19,17 +21,20 @@ func main() {
 
 	fmt.Println("Connected to the server on port :6380")
 
+	// Create a single store instance for all connections
+	st := store.New()
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			continue
 		}
 
-		go handleConnection(conn)
+		go handleConnection(conn, st)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, st *store.Store) {
 	defer conn.Close()
 	fmt.Println("Client connected")
 
@@ -60,6 +65,15 @@ func handleConnection(conn net.Conn) {
 			arg := parts[1]
 			resp := fmt.Sprintf("$%d\r\n%s\r\n", len(arg), arg)
 			conn.Write([]byte(resp))
+
+		case "SET":
+			resp := commands.HandleSET(st, parts)
+			conn.Write(resp)
+
+		case "GET":
+			resp := commands.HandleGET(st, parts)
+			conn.Write(resp)
+
 		default:
 			conn.Write([]byte("unknown command"))
 
