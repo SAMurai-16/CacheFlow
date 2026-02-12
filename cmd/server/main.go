@@ -79,6 +79,12 @@ func handleConnection(conn net.Conn, st *store.Store) {
 		case "LRANGE": 
 			resp := commands.HandleLRANGE(st,parts)
 			conn.Write(resp)
+		case "LPUSH":
+			resp := commands.HandleLPUSH(st, parts)
+			conn.Write(resp)
+		case "LLEN":
+			resp := commands.HandleLLEN(st,parts)
+			conn.Write(resp)
 
 
 		default:
