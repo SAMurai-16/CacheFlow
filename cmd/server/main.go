@@ -94,6 +94,10 @@ func handleConnection(conn net.Conn, st *store.Store) {
 		case "XADD":
 			resp := commands.HandleXADD(st, parts)
 			conn.Write(resp)
+		case "XRANGE":
+			resp := commands.HandleXRANGE(st, parts)
+			conn.Write(resp)
+
 
 		default:
 			conn.Write([]byte("unknown command"))
