@@ -36,6 +36,12 @@ func main() {
 
 func handleConnection(conn net.Conn, st *store.Store) {
 	defer conn.Close()
+
+
+	inTransaction := false
+	var queuedCommands [][]string
+
+
 	fmt.Println("Client connected")
 
 	reader := bufio.NewReader(conn)
@@ -53,56 +59,121 @@ func handleConnection(conn net.Conn, st *store.Store) {
 
 		cmd := strings.ToUpper(parts[0])
 
-		switch cmd {
+		if cmd == "MULTI" {
+			inTransaction = true
+			fmt.Println(inTransaction)
+			queuedCommands = nil
+			conn.Write([]byte("+OK\r\n"))
+			continue
+		}
+
+		if cmd == "EXEC"{
+			fmt.Println(inTransaction)
+			if !inTransaction {
+				conn.Write([]byte("-ERR EXEC without MULTI\r\n"))
+				continue
+			}
+
+			var response [][]byte
+
+			for _,queued := range queuedCommands {
+				resp:= executeCommands(st,queued)
+				response = append(response, resp)
+			}
+
+			var result strings.Builder
+			result.WriteString(fmt.Sprintf("*%d\r\n",len(response)))
+
+			for _,r := range response{
+				result.Write(r)
+			}
+
+
+
+			conn.Write([]byte(result.String()))
+
+			inTransaction = false
+			queuedCommands = nil
+			continue
+		}
+
+
+		if inTransaction{
+			queuedCommands = append(queuedCommands, parts)
+			conn.Write([]byte("+QUEUED\r\n"))
+			continue
+		}
+
+		resp := executeCommands(st,parts)
+		conn.Write(resp)
+
+
+
+
+
+	}
+}
+
+
+func executeCommands(st *store.Store, parts []string) []byte {
+
+	cmd := strings.ToUpper(parts[0])
+
+	switch cmd {
 		case "PING":
-			conn.Write([]byte("+PONG\r\n"))
+			return ([]byte("+PONG\r\n"))
 
 		case "ECHO":
 			if len(parts) < 2 {
-				conn.Write([]byte("$0\r\n\r\n"))
-				continue
+				return ([]byte("$0\r\n\r\n"))
+			
 			}
 			arg := parts[1]
-			resp := fmt.Sprintf("$%d\r\n%s\r\n", len(arg), arg)
-			conn.Write([]byte(resp))
+			return  []byte(fmt.Sprintf("$%d\r\n%s\r\n", len(arg), arg))
+			
 
 		case "SET":
-			resp := commands.HandleSET(st, parts)
-			conn.Write(resp)
+			return commands.HandleSET(st, parts)
+			
 
 		case "GET":
-			resp := commands.HandleGET(st, parts)
-			conn.Write(resp)
+			return  commands.HandleGET(st, parts)
+			
 		case "RPUSH":
-			resp := commands.HandleRPUSH(st, parts)
-			conn.Write(resp)
+			return commands.HandleRPUSH(st, parts)
+			
 		case "LRANGE":
-			resp := commands.HandleLRANGE(st, parts)
-			conn.Write(resp)
+			return commands.HandleLRANGE(st, parts)
+			
 		case "LPUSH":
-			resp := commands.HandleLPUSH(st, parts)
-			conn.Write(resp)
+			return commands.HandleLPUSH(st, parts)
+			
 		case "LLEN":
-			resp := commands.HandleLLEN(st, parts)
-			conn.Write(resp)
+			return commands.HandleLLEN(st, parts)
+			
 		case "LPOP":
-			resp := commands.HandleLPOP(st, parts)
-			conn.Write(resp)
+			return commands.HandleLPOP(st, parts)
+			
 		case "TYPE":
-			resp := commands.HandleTYPE(st, parts)
-			conn.Write(resp)
+			return commands.HandleTYPE(st, parts)
+			
 		case "XADD":
-			resp := commands.HandleXADD(st, parts)
-			conn.Write(resp)
+			return commands.HandleXADD(st, parts)
+			
 		case "XRANGE":
-			resp := commands.HandleXRANGE(st, parts)
-			conn.Write(resp)
+			return commands.HandleXRANGE(st, parts)
+			
+		case "XREAD":
+			return commands.HandleXREAD(st, parts)
+			
+		case "INCR":
+			return commands.HandleINCR(st, parts)
+			
 
 
 		default:
-			conn.Write([]byte("unknown command"))
+		return ([]byte("-ERR unknown command\r\n"))
 
 		}
 
-	}
 }

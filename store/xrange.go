@@ -7,6 +7,17 @@ import (
 )
 
 func normalizeRangeID(id string, isStart bool) (int64, int64, error) {
+
+	if id == "-" {
+		return 0, 0, nil
+	}
+
+
+
+	if id == "+" {
+		return math.MaxInt64, math.MaxInt64, nil
+	}
+
 	if strings.Contains(id, "-") {
 		return parseStreamID(id)
 	}
