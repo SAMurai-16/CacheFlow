@@ -29,11 +29,30 @@ type Entry struct {
 type Store struct {
 	mu   sync.RWMutex
 	data map[string]Entry
+
+	
+	Role string   // "master" or "slave"
+
+	MasterHost string
+	MasterPort string
+
+
+	ReplID     string
+	ReplOffset int64
+
+	ReplicaPort string
 }
 
-func New() *Store {
+func New(role, host, masterPort, replicaPort string) *Store {
 	return &Store{
 		data: make(map[string]Entry),
+		Role: role,
+		MasterHost: host,
+		MasterPort: masterPort,
+		ReplicaPort: replicaPort,
+		ReplID:       "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+		ReplOffset:   0,
+
 	}
 }
 
