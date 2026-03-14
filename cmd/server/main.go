@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"samyak.go_redis/engine"
@@ -67,7 +68,10 @@ func main() {
 }
 
 func handleConnection(conn net.Conn, st *store.Store) {
-	defer conn.Close()
+	defer func() {
+		removeReplicaConnection(st, conn)
+		conn.Close()
+	}()
 
 	inTransaction := false
 	var queuedCommands [][]string
@@ -88,6 +92,16 @@ func handleConnection(conn net.Conn, st *store.Store) {
 		}
 
 		cmd := strings.ToUpper(parts[0])
+
+		if cmd == "REPLCONF" && len(parts) >= 3 && strings.ToUpper(parts[1]) == "ACK" {
+			offset, parseErr := strconv.ParseInt(parts[2], 10, 64)
+			if parseErr == nil {
+				st.Mu.Lock()
+				st.ReplicaAck[conn] = offset
+				st.Mu.Unlock()
+			}
+			continue
+		}
 
 		if cmd == "MULTI" {
 			inTransaction = true
@@ -158,6 +172,7 @@ func handleConnection(conn net.Conn, st *store.Store) {
 			// 3) register the replica
 			st.Mu.Lock()
 			st.Replicas = append(st.Replicas, conn)
+			st.ReplicaAck[conn] = 0
 			st.Mu.Unlock()
 
 			continue
@@ -172,9 +187,32 @@ func handleConnection(conn net.Conn, st *store.Store) {
 		resp := engine.ExecuteCommands(st, parts)
 		conn.Write(resp)
 
-		if st.Role == "master" {
+		if st.Role == "master" && shouldPropagateCommand(cmd) {
 			helper.PropagateToReplicas(st, parts)
 		}
 
 	}
+}
+
+func shouldPropagateCommand(cmd string) bool {
+	switch cmd {
+	case "SET", "INCR", "LPUSH", "RPUSH", "LPOP", "XADD":
+		return true
+	default:
+		return false
+	}
+}
+
+func removeReplicaConnection(st *store.Store, conn net.Conn) {
+	st.Mu.Lock()
+	defer st.Mu.Unlock()
+
+	for i, replica := range st.Replicas {
+		if replica == conn {
+			st.Replicas = append(st.Replicas[:i], st.Replicas[i+1:]...)
+			break
+		}
+	}
+
+	delete(st.ReplicaAck, conn)
 }

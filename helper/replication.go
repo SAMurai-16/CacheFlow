@@ -77,7 +77,26 @@ func ConnectToMaster(st *store.Store) {
 			return
 		}
 
+		if len(parts)== 0 {
+			continue
+		}
+
+		cmd := strings.ToUpper(parts[0])
+		size := respArraySize(parts)
+
+		if cmd == "REPLCONF" && len(parts) >= 2 &&
+			strings.ToUpper(parts[1]) == "GETACK" {
+
+				sendACK(conn, st.ReplOffset)
+
+				st.ReplOffset += size
+				continue
+			}
+
+
 		commands.ApplyReplicaCommand(st, parts)
+
+		st.ReplOffset += size
 	}
 }
 
@@ -94,11 +113,35 @@ func PropagateToReplicas(st *store.Store, parts []string) {
 
 	data := builder.String()
 
-	st.Mu.RLock()
+	st.Mu.Lock()
 	replicas := append([]net.Conn(nil), st.Replicas...)
-	st.Mu.RUnlock()
+	st.ReplOffset += int64(len(data))
+	st.Mu.Unlock()
 
 	for _, r := range replicas {
 		r.Write([]byte(data))
 	}
+}
+
+
+
+func sendACK(conn net.Conn, offset int64) {
+	offsetStr := strconv.FormatInt(offset, 10)
+
+	resp := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(offsetStr), offsetStr)
+
+	conn.Write([]byte(resp))
+}
+
+
+func respArraySize(parts []string) int64 {
+	size := int64(0)
+
+	size += int64(len(fmt.Sprintf("*%d\r\n", len(parts))))
+
+	for _, p := range parts {
+		size += int64(len(fmt.Sprintf("$%d\r\n%s\r\n", len(p), p)))
+	}
+
+	return size
 }

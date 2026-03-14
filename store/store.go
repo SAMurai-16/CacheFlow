@@ -39,6 +39,9 @@ type Store struct {
 	ReplID     string
 	ReplOffset int64
 
+	ReplicaAck map[net.Conn]int64
+	LastWaitOffset int64
+
 	ReplicaPort string
 	Replicas    []net.Conn
 }
@@ -52,6 +55,8 @@ func New(role, host, masterPort, replicaPort string) *Store {
 		ReplicaPort: replicaPort,
 		ReplID:      "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
 		ReplOffset:  0,
+		ReplicaAck:  make(map[net.Conn]int64),
+		LastWaitOffset: 0,
 		Replicas: make([]net.Conn, 0),
 	}
 }
