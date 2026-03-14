@@ -47,6 +47,8 @@ type Store struct {
 
 	Dir string 
 	DBFilename string
+
+	ChannelSubscribers map[string]map[net.Conn]struct{}
 }
 
 func New(role, host, masterPort, replicaPort, dir, dbfilename string) *Store {
@@ -63,6 +65,7 @@ func New(role, host, masterPort, replicaPort, dir, dbfilename string) *Store {
 		Replicas: make([]net.Conn, 0),
 		Dir: dir,
 		DBFilename: dbfilename,
+		ChannelSubscribers: make(map[string]map[net.Conn]struct{}),
 	}
 }
 
@@ -259,4 +262,49 @@ func (s *Store) Keys() []string {
         out = append(out, k)
     }
     return out
+}
+
+
+func (s *Store) AddSubscriber(channel string, conn net.Conn) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+
+    if s.ChannelSubscribers[channel] == nil {
+        s.ChannelSubscribers[channel] = make(map[net.Conn]struct{})
+    }
+    s.ChannelSubscribers[channel][conn] = struct{}{}
+}
+
+func (s *Store) CountSubscribers(channel string) int {
+    s.Mu.RLock()
+    defer s.Mu.RUnlock()
+
+    return len(s.ChannelSubscribers[channel])
+}
+
+func (s *Store) RemoveSubscriber(channel string, conn net.Conn) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+
+    subs, ok := s.ChannelSubscribers[channel]
+    if !ok {
+        return
+    }
+    delete(subs, conn)
+    if len(subs) == 0 {
+        delete(s.ChannelSubscribers, channel)
+    }
+}
+
+
+func (s *Store) Subscribers(channel string) []net.Conn {
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+
+	subs := s.ChannelSubscribers[channel]
+	out := make([]net.Conn, 0, len(subs))
+	for c := range subs {
+		out = append(out, c)
+	}
+	return out
 }

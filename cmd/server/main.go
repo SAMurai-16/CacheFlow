@@ -49,7 +49,7 @@ func main() {
 		if os.Args[i] == "--dbfilename" && i+1 < len(os.Args) {
 			dbfilename = os.Args[i+1]
 		}
-		}
+	}
 
 	ln, err := net.Listen("tcp", ":"+port)
 
@@ -63,8 +63,8 @@ func main() {
 	st := store.New(role, masterHost, masterPort, port, dir, dbfilename)
 
 	if err := st.LoadRDB(); err != nil {
-    fmt.Println("Failed to load RDB:", err)
-}
+		fmt.Println("Failed to load RDB:", err)
+	}
 
 	if st.Role == "slave" {
 		go helper.ConnectToMaster(st)
@@ -81,13 +81,18 @@ func main() {
 }
 
 func handleConnection(conn net.Conn, st *store.Store) {
-	defer func() {
-		removeReplicaConnection(st, conn)
-		conn.Close()
-	}()
 
 	inTransaction := false
 	var queuedCommands [][]string
+	subscriptions := make(map[string]struct{})
+
+	defer func() {
+		removeReplicaConnection(st, conn)
+		for ch := range subscriptions {
+			st.RemoveSubscriber(ch, conn)
+		}
+		conn.Close()
+	}()
 
 	fmt.Println("Client connected")
 
@@ -105,6 +110,20 @@ func handleConnection(conn net.Conn, st *store.Store) {
 		}
 
 		cmd := strings.ToUpper(parts[0])
+
+		if len(subscriptions) > 0 && !isAllowedInSubscribedMode(cmd) {
+			errResp := fmt.Sprintf(
+				"-ERR Can't execute '%s' in subscribed mode\r\n",
+				strings.ToLower(cmd),
+			)
+			conn.Write([]byte(errResp))
+			continue
+		}
+
+		if cmd == "PING" && len(subscriptions) > 0 {
+			conn.Write([]byte("*2\r\n$4\r\npong\r\n$0\r\n\r\n"))
+			continue
+		}
 
 		if cmd == "REPLCONF" && len(parts) >= 3 && strings.ToUpper(parts[1]) == "ACK" {
 			offset, parseErr := strconv.ParseInt(parts[2], 10, 64)
@@ -197,6 +216,98 @@ func handleConnection(conn net.Conn, st *store.Store) {
 			continue
 		}
 
+		if cmd == "SUBSCRIBE" {
+			if len(parts) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'subscribe' command\r\n"))
+				continue
+			}
+
+			for _, channel := range parts[1:] {
+				subscriptions[channel] = struct{}{} // unique channels per client
+				st.AddSubscriber(channel, conn)
+				count := len(subscriptions)
+
+				resp := fmt.Sprintf(
+					"*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:%d\r\n",
+					len(channel),
+					channel,
+					count,
+				)
+				conn.Write([]byte(resp))
+			}
+			continue
+		}
+
+		if cmd == "PUBLISH" {
+			if len(parts) != 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'publish' command\r\n"))
+				continue
+			}
+
+			channel := parts[1]
+			message := parts[2]
+
+			subs := st.Subscribers(channel)
+
+			push := fmt.Sprintf(
+				"*3\r\n$7\r\nmessage\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+				len(channel), channel, len(message), message,
+			)
+
+			delivered := 0
+			for _, subConn := range subs {
+				if _, werr := subConn.Write([]byte(push)); werr == nil {
+					delivered++
+				}
+			}
+
+			conn.Write([]byte(fmt.Sprintf(":%d\r\n", delivered)))
+			continue
+		}
+
+
+
+		if cmd == "UNSUBSCRIBE" {
+    		// For this stage, tester sends channel names; handle empty too for safety.
+			if len(parts) == 1 {
+				// Redis unsubscribes from all current channels.
+				for channel := range subscriptions {
+					delete(subscriptions, channel)
+					st.RemoveSubscriber(channel, conn)
+
+					resp := fmt.Sprintf(
+						"*3\r\n$11\r\nunsubscribe\r\n$%d\r\n%s\r\n:%d\r\n",
+						len(channel),
+						channel,
+						len(subscriptions),
+					)
+					conn.Write([]byte(resp))
+				}
+				// If none were subscribed, still send one response with empty channel.
+				if len(subscriptions) == 0 {
+					conn.Write([]byte("*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n"))
+				}
+				continue
+			}
+
+			for _, channel := range parts[1:] {
+				_, wasSubscribed := subscriptions[channel]
+				if wasSubscribed {
+					delete(subscriptions, channel)
+					st.RemoveSubscriber(channel, conn)
+				}
+
+				resp := fmt.Sprintf(
+					"*3\r\n$11\r\nunsubscribe\r\n$%d\r\n%s\r\n:%d\r\n",
+					len(channel),
+					channel,
+					len(subscriptions),
+				)
+				conn.Write([]byte(resp))
+			}
+			continue
+		}
+
 		resp := engine.ExecuteCommands(st, parts)
 		conn.Write(resp)
 
@@ -228,4 +339,13 @@ func removeReplicaConnection(st *store.Store, conn net.Conn) {
 	}
 
 	delete(st.ReplicaAck, conn)
+}
+
+func isAllowedInSubscribedMode(cmd string) bool {
+	switch cmd {
+	case "SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE", "PING", "QUIT", "RESET":
+		return true
+	default:
+		return false
+	}
 }
