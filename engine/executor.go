@@ -68,6 +68,12 @@ func ExecuteCommands(st *store.Store, parts []string) []byte {
 	case "WAIT":
 		return commands.HandleWAIT(st, parts)
 
+	case "CONFIG":
+		return commands.HandleCONFIG(st, parts)
+	case "KEYS":
+		return commands.HANDLEKEYS(st,parts)
+
+
 	default:
 		return ([]byte("-ERR unknown command\r\n"))
 

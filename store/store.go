@@ -44,9 +44,12 @@ type Store struct {
 
 	ReplicaPort string
 	Replicas    []net.Conn
+
+	Dir string 
+	DBFilename string
 }
 
-func New(role, host, masterPort, replicaPort string) *Store {
+func New(role, host, masterPort, replicaPort, dir, dbfilename string) *Store {
 	return &Store{
 		data:        make(map[string]Entry),
 		Role:        role,
@@ -58,6 +61,8 @@ func New(role, host, masterPort, replicaPort string) *Store {
 		ReplicaAck:  make(map[net.Conn]int64),
 		LastWaitOffset: 0,
 		Replicas: make([]net.Conn, 0),
+		Dir: dir,
+		DBFilename: dbfilename,
 	}
 }
 
@@ -73,8 +78,8 @@ func (s *Store) Set(key, value string, expireAt time.Time) {
 }
 
 func (s *Store) Get(key string) (string, bool) {
-	s.Mu.RLock()
-	defer s.Mu.RUnlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
 	entry, ok := s.data[key]
 	if !ok {
@@ -236,4 +241,22 @@ func (s *Store) TypeOf(key string) string {
 	default:
 		return "none"
 	}
+}
+
+
+
+func (s *Store) Keys() []string {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+
+    now := time.Now()
+    out := make([]string, 0, len(s.data))
+    for k, e := range s.data {
+        if !e.ExpireAt.IsZero() && now.After(e.ExpireAt) {
+            delete(s.data, k)
+            continue
+        }
+        out = append(out, k)
+    }
+    return out
 }

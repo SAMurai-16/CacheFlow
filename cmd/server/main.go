@@ -27,6 +27,8 @@ func main() {
 	role := "master"
 	masterHost := ""
 	masterPort := ""
+	dir := "."
+	dbfilename := "dump.rdb"
 
 	for i := 0; i < len(os.Args); i++ {
 		if os.Args[i] == "--port" && i+1 < len(os.Args) {
@@ -40,7 +42,14 @@ func main() {
 			masterPort = os.Args[i+2]
 		}
 
-	}
+		if os.Args[i] == "--dir" && i+1 < len(os.Args) {
+			dir = os.Args[i+1]
+		}
+
+		if os.Args[i] == "--dbfilename" && i+1 < len(os.Args) {
+			dbfilename = os.Args[i+1]
+		}
+		}
 
 	ln, err := net.Listen("tcp", ":"+port)
 
@@ -51,7 +60,11 @@ func main() {
 	fmt.Println("Connected to the server on port", port)
 
 	// Create a single store instance for all connections
-	st := store.New(role, masterHost, masterPort, port)
+	st := store.New(role, masterHost, masterPort, port, dir, dbfilename)
+
+	if err := st.LoadRDB(); err != nil {
+    fmt.Println("Failed to load RDB:", err)
+}
 
 	if st.Role == "slave" {
 		go helper.ConnectToMaster(st)
