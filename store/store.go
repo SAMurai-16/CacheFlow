@@ -39,32 +39,41 @@ type Store struct {
 	ReplID     string
 	ReplOffset int64
 
-	ReplicaAck map[net.Conn]int64
+	ReplicaAck     map[net.Conn]int64
 	LastWaitOffset int64
 
 	ReplicaPort string
 	Replicas    []net.Conn
 
-	Dir string 
+	Dir        string
 	DBFilename string
+
+	AppendOnly     string
+	AppendDirname  string
+	AppendFilename string
+	AppendFsync    string
 
 	ChannelSubscribers map[string]map[net.Conn]struct{}
 }
 
-func New(role, host, masterPort, replicaPort, dir, dbfilename string) *Store {
+func New(role, host, masterPort, replicaPort, dir, dbfilename, appendonly, appenddirname, appendfilename, appendfsync string) *Store {
 	return &Store{
-		data:        make(map[string]Entry),
-		Role:        role,
-		MasterHost:  host,
-		MasterPort:  masterPort,
-		ReplicaPort: replicaPort,
-		ReplID:      "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
-		ReplOffset:  0,
-		ReplicaAck:  make(map[net.Conn]int64),
-		LastWaitOffset: 0,
-		Replicas: make([]net.Conn, 0),
-		Dir: dir,
-		DBFilename: dbfilename,
+		data:               make(map[string]Entry),
+		Role:               role,
+		MasterHost:         host,
+		MasterPort:         masterPort,
+		ReplicaPort:        replicaPort,
+		ReplID:             "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+		ReplOffset:         0,
+		ReplicaAck:         make(map[net.Conn]int64),
+		LastWaitOffset:     0,
+		Replicas:           make([]net.Conn, 0),
+		Dir:                dir,
+		DBFilename:         dbfilename,
+		AppendOnly:         appendonly,
+		AppendDirname:      appenddirname,
+		AppendFilename:     appendfilename,
+		AppendFsync:        appendfsync,
 		ChannelSubscribers: make(map[string]map[net.Conn]struct{}),
 	}
 }
@@ -246,56 +255,52 @@ func (s *Store) TypeOf(key string) string {
 	}
 }
 
-
-
 func (s *Store) Keys() []string {
-    s.Mu.Lock()
-    defer s.Mu.Unlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
-    now := time.Now()
-    out := make([]string, 0, len(s.data))
-    for k, e := range s.data {
-        if !e.ExpireAt.IsZero() && now.After(e.ExpireAt) {
-            delete(s.data, k)
-            continue
-        }
-        out = append(out, k)
-    }
-    return out
+	now := time.Now()
+	out := make([]string, 0, len(s.data))
+	for k, e := range s.data {
+		if !e.ExpireAt.IsZero() && now.After(e.ExpireAt) {
+			delete(s.data, k)
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
 }
 
-
 func (s *Store) AddSubscriber(channel string, conn net.Conn) {
-    s.Mu.Lock()
-    defer s.Mu.Unlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
-    if s.ChannelSubscribers[channel] == nil {
-        s.ChannelSubscribers[channel] = make(map[net.Conn]struct{})
-    }
-    s.ChannelSubscribers[channel][conn] = struct{}{}
+	if s.ChannelSubscribers[channel] == nil {
+		s.ChannelSubscribers[channel] = make(map[net.Conn]struct{})
+	}
+	s.ChannelSubscribers[channel][conn] = struct{}{}
 }
 
 func (s *Store) CountSubscribers(channel string) int {
-    s.Mu.RLock()
-    defer s.Mu.RUnlock()
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
 
-    return len(s.ChannelSubscribers[channel])
+	return len(s.ChannelSubscribers[channel])
 }
 
 func (s *Store) RemoveSubscriber(channel string, conn net.Conn) {
-    s.Mu.Lock()
-    defer s.Mu.Unlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
-    subs, ok := s.ChannelSubscribers[channel]
-    if !ok {
-        return
-    }
-    delete(subs, conn)
-    if len(subs) == 0 {
-        delete(s.ChannelSubscribers, channel)
-    }
+	subs, ok := s.ChannelSubscribers[channel]
+	if !ok {
+		return
+	}
+	delete(subs, conn)
+	if len(subs) == 0 {
+		delete(s.ChannelSubscribers, channel)
+	}
 }
-
 
 func (s *Store) Subscribers(channel string) []net.Conn {
 	s.Mu.RLock()

@@ -24,6 +24,14 @@ func HandleCONFIG(st *store.Store, parts []string) []byte {
 		value = st.Dir
 	case "dbfilename":
 		value = st.DBFilename
+	case "appendonly":
+		value = st.AppendOnly
+	case "appenddirname":
+		value = st.AppendDirname
+	case "appendfilename":
+		value = st.AppendFilename
+	case "appendfsync":
+		value = st.AppendFsync
 	default:
 		return []byte("*0\r\n")
 	}

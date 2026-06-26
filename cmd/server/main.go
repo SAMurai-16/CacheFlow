@@ -22,13 +22,21 @@ var emptyRDB = []byte{
 }
 
 func main() {
+	//setting default values
 	port := "6380"
 
 	role := "master"
 	masterHost := ""
 	masterPort := ""
-	dir := "."
+	dir, err := os.Getwd()
+	if err != nil {
+		dir = "."
+	}
 	dbfilename := "dump.rdb"
+	appendonly := "no"
+	appenddirname := "appendonlydir"
+	appendfilename := "appendonly.aof"
+	appendfsync := "everysec"
 
 	for i := 0; i < len(os.Args); i++ {
 		if os.Args[i] == "--port" && i+1 < len(os.Args) {
@@ -49,6 +57,22 @@ func main() {
 		if os.Args[i] == "--dbfilename" && i+1 < len(os.Args) {
 			dbfilename = os.Args[i+1]
 		}
+
+		if os.Args[i] == "--appendonly" && i+1 < len(os.Args) {
+			appendonly = os.Args[i+1]
+		}
+
+		if os.Args[i] == "--appenddirname" && i+1 < len(os.Args) {
+			appenddirname = os.Args[i+1]
+		}
+
+		if os.Args[i] == "--appendfilename" && i+1 < len(os.Args) {
+			appendfilename = os.Args[i+1]
+		}
+
+		if os.Args[i] == "--appendfsync" && i+1 < len(os.Args) {
+			appendfsync = os.Args[i+1]
+		}
 	}
 
 	ln, err := net.Listen("tcp", ":"+port)
@@ -60,7 +84,7 @@ func main() {
 	fmt.Println("Connected to the server on port", port)
 
 	// Create a single store instance for all connections
-	st := store.New(role, masterHost, masterPort, port, dir, dbfilename)
+	st := store.New(role, masterHost, masterPort, port, dir, dbfilename, appendonly, appenddirname, appendfilename, appendfsync)
 
 	if err := st.LoadRDB(); err != nil {
 		fmt.Println("Failed to load RDB:", err)
@@ -265,10 +289,8 @@ func handleConnection(conn net.Conn, st *store.Store) {
 			continue
 		}
 
-
-
 		if cmd == "UNSUBSCRIBE" {
-    		// For this stage, tester sends channel names; handle empty too for safety.
+			// For this stage, tester sends channel names; handle empty too for safety.
 			if len(parts) == 1 {
 				// Redis unsubscribes from all current channels.
 				for channel := range subscriptions {

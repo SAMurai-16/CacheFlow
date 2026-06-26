@@ -26,8 +26,14 @@ func ConnectToMaster(st *store.Store) {
 	reader := bufio.NewReader(conn)
 
 	// 1) PING
-	conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
-	reader.ReadString('\n')
+	if _, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
+		fmt.Println("Failed to send PING to master:", err)
+		return
+	}
+	if err := readExpectedLine(reader, "+PONG"); err != nil {
+		fmt.Println("Invalid PING response from master:", err)
+		return
+	}
 
 	// 2) REPLCONF listening-port
 	replconf1 := fmt.Sprintf(
@@ -35,41 +41,79 @@ func ConnectToMaster(st *store.Store) {
 		len(st.ReplicaPort),
 		st.ReplicaPort,
 	)
-	conn.Write([]byte(replconf1))
-	reader.ReadString('\n')
+	if _, err := conn.Write([]byte(replconf1)); err != nil {
+		fmt.Println("Failed to send REPLCONF listening-port to master:", err)
+		return
+	}
+	if err := readExpectedLine(reader, "+OK"); err != nil {
+		fmt.Println("Invalid REPLCONF listening-port response from master:", err)
+		return
+	}
 
 	// 3) REPLCONF capa psync2
-	conn.Write([]byte(
+	if _, err := conn.Write([]byte(
 		"*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n",
-	))
-	reader.ReadString('\n')
+	)); err != nil {
+		fmt.Println("Failed to send REPLCONF capa to master:", err)
+		return
+	}
+	if err := readExpectedLine(reader, "+OK"); err != nil {
+		fmt.Println("Invalid REPLCONF capa response from master:", err)
+		return
+	}
 
 	// 4) PSYNC ? -1
-	conn.Write([]byte(
+	if _, err := conn.Write([]byte(
 		"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n",
-	))
+	)); err != nil {
+		fmt.Println("Failed to send PSYNC to master:", err)
+		return
+	}
 
 	// FULLRESYNC line
-	reader.ReadString('\n')
+	fullResync, err := readLine(reader)
+	if err != nil {
+		fmt.Println("Failed to read FULLRESYNC response from master:", err)
+		return
+	}
+	if !strings.HasPrefix(fullResync, "+FULLRESYNC ") {
+		fmt.Println("Invalid PSYNC response from master:", fullResync)
+		return
+	}
 
 	// READ RDB BULK HEADER
-	header, _ := reader.ReadString('\n') // e.g. "$88\r\n"
+	header, err := readLine(reader) // e.g. "$88"
+	if err != nil {
+		fmt.Println("Failed to read RDB header from master:", err)
+		return
+	}
 
 	if len(header) == 0 || header[0] != '$' {
 		fmt.Println("Invalid RDB header:", header)
 		return
 	}
 
-	lengthStr := strings.TrimSpace(header[1:])
-	length, _ := strconv.Atoi(lengthStr)
+	lengthStr := header[1:]
+	length, err := strconv.Atoi(lengthStr)
+	if err != nil {
+		fmt.Println("Invalid RDB length:", lengthStr)
+		return
+	}
+	if length < 0 {
+		fmt.Println("Invalid RDB length:", length)
+		return
+	}
 
 	// READ EXACT BINARY DATA
 	rdb := make([]byte, length)
-	io.ReadFull(reader, rdb)
+	if _, err := io.ReadFull(reader, rdb); err != nil {
+		fmt.Println("Failed to read RDB snapshot from master:", err)
+		return
+	}
 
 	fmt.Println("Received RDB snapshot:", length, "bytes")
 
-	// NOW start replication stream
+	// NOW start replication stream(salve reads)
 	for {
 		parts, err := resp.ReadRESPArray(reader)
 		if err != nil {
@@ -77,7 +121,7 @@ func ConnectToMaster(st *store.Store) {
 			return
 		}
 
-		if len(parts)== 0 {
+		if len(parts) == 0 {
 			continue
 		}
 
@@ -87,12 +131,11 @@ func ConnectToMaster(st *store.Store) {
 		if cmd == "REPLCONF" && len(parts) >= 2 &&
 			strings.ToUpper(parts[1]) == "GETACK" {
 
-				sendACK(conn, st.ReplOffset)
-
-				st.ReplOffset += size
-				continue
-			}
-
+			
+			st.ReplOffset += size
+			sendACK(conn, st.ReplOffset)
+			continue
+		}
 
 		commands.ApplyReplicaCommand(st, parts)
 
@@ -100,6 +143,29 @@ func ConnectToMaster(st *store.Store) {
 	}
 }
 
+func readExpectedLine(reader *bufio.Reader, expected string) error {
+	line, err := readLine(reader)
+	if err != nil {
+		return err
+	}
+
+	if line != expected {
+		return fmt.Errorf("expected %q, got %q", expected, line)
+	}
+
+	return nil
+}
+
+func readLine(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(line), nil
+}
+
+//for master 
 func PropagateToReplicas(st *store.Store, parts []string) {
 
 	// Convert command to RESP array
@@ -123,8 +189,6 @@ func PropagateToReplicas(st *store.Store, parts []string) {
 	}
 }
 
-
-
 func sendACK(conn net.Conn, offset int64) {
 	offsetStr := strconv.FormatInt(offset, 10)
 
@@ -132,7 +196,6 @@ func sendACK(conn net.Conn, offset int64) {
 
 	conn.Write([]byte(resp))
 }
-
 
 func respArraySize(parts []string) int64 {
 	size := int64(0)
