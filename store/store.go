@@ -1,9 +1,11 @@
 package store
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -94,23 +96,81 @@ func (s *Store) EnsureAppendOnlyFile() error {
 	}
 
 	aofPath := filepath.Join(s.Dir, s.AppendDirname, s.AppendFilename+".1.incr.aof")
-	file, err := os.Create(aofPath)
-	if err != nil {
-		return err
+	if _, err := os.Stat(aofPath); os.IsNotExist(err) {
+		file, err := os.Create(aofPath)
+		if err != nil {
+			return err
+		}
+		file.Close()
 	}
-	file.Close()
 
 	manifestPath := filepath.Join(s.Dir, s.AppendDirname, s.AppendFilename+".manifest")
-	manifestFile, err := os.Create(manifestPath)
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		manifestFile, err := os.Create(manifestPath)
+		if err != nil {
+			return err
+		}
+		defer manifestFile.Close()
+
+		manifestContent := "file " + s.AppendFilename + ".1.incr.aof seq 1 type i\n"
+		_, err = manifestFile.WriteString(manifestContent)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) AppendToAOF(parts []string) error {
+	if s.AppendOnly != "yes" {
+		return nil
+	}
+
+	manifestPath := filepath.Join(s.Dir, s.AppendDirname, s.AppendFilename+".manifest")
+	content, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return err
 	}
-	defer manifestFile.Close()
 
-	manifestContent := "file " + s.AppendFilename + ".1.incr.aof seq 1 type i\n"
-	_, err = manifestFile.WriteString(manifestContent)
+	var aofFileName string
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "type i") {
+			tokens := strings.Split(line, " ")
+			for i, token := range tokens {
+				if token == "file" && i+1 < len(tokens) {
+					aofFileName = tokens[i+1]
+					break
+				}
+			}
+		}
+	}
+
+	if aofFileName == "" {
+		return nil
+	}
+
+	aofPath := filepath.Join(s.Dir, s.AppendDirname, aofFileName)
+	f, err := os.OpenFile(aofPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
+	}
+	defer f.Close()
+
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("*%d\r\n", len(parts)))
+	for _, p := range parts {
+		builder.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(p), p))
+	}
+	
+	_, err = f.WriteString(builder.String())
+	if err != nil {
+		return err
+	}
+	
+	if s.AppendFsync == "always" {
+		f.Sync()
 	}
 
 	return nil

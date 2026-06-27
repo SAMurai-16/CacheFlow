@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -98,6 +99,10 @@ func main() {
 		fmt.Println("Failed to load RDB:", err)
 	}
 
+	if err := loadAOF(st); err != nil {
+		fmt.Println("Failed to load AOF:", err)
+	}
+
 	if st.Role == "slave" {
 		go helper.ConnectToMaster(st)
 	}
@@ -110,6 +115,62 @@ func main() {
 
 		go handleConnection(conn, st)
 	}
+}
+
+func loadAOF(st *store.Store) error {
+	if st.AppendOnly != "yes" {
+		return nil
+	}
+
+	manifestPath := filepath.Join(st.Dir, st.AppendDirname, st.AppendFilename+".manifest")
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var aofFileName string
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "type i") {
+			tokens := strings.Split(line, " ")
+			for i, token := range tokens {
+				if token == "file" && i+1 < len(tokens) {
+					aofFileName = tokens[i+1]
+					break
+				}
+			}
+		}
+	}
+
+	if aofFileName == "" {
+		return nil
+	}
+
+	aofPath := filepath.Join(st.Dir, st.AppendDirname, aofFileName)
+	file, err := os.Open(aofPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	for {
+		parts, err := resp.ReadRESPArray(reader)
+		if err != nil {
+			break // EOF or format error
+		}
+		if len(parts) > 0 {
+			engine.ExecuteCommands(st, parts)
+		}
+	}
+
+	return nil
 }
 
 func handleConnection(conn net.Conn, st *store.Store) {
@@ -186,6 +247,9 @@ func handleConnection(conn net.Conn, st *store.Store) {
 
 			for _, queued := range queuedCommands {
 				resp := engine.ExecuteCommands(st, queued)
+				if len(queued) > 0 && shouldPropagateCommand(strings.ToUpper(queued[0])) {
+					st.AppendToAOF(queued)
+				}
 				response = append(response, resp)
 			}
 
@@ -339,6 +403,9 @@ func handleConnection(conn net.Conn, st *store.Store) {
 		}
 
 		resp := engine.ExecuteCommands(st, parts)
+		if shouldPropagateCommand(cmd) {
+			st.AppendToAOF(parts)
+		}
 		conn.Write(resp)
 
 		if st.Role == "master" && shouldPropagateCommand(cmd) {
@@ -350,7 +417,7 @@ func handleConnection(conn net.Conn, st *store.Store) {
 
 func shouldPropagateCommand(cmd string) bool {
 	switch cmd {
-	case "SET", "INCR", "LPUSH", "RPUSH", "LPOP", "XADD":
+	case "SET", "INCR", "LPUSH", "RPUSH", "LPOP", "XADD", "DEL":
 		return true
 	default:
 		return false
