@@ -2,6 +2,8 @@ package store
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -76,6 +78,42 @@ func New(role, host, masterPort, replicaPort, dir, dbfilename, appendonly, appen
 		AppendFsync:        appendfsync,
 		ChannelSubscribers: make(map[string]map[net.Conn]struct{}),
 	}
+}
+
+func (s *Store) EnsureAppendOnlyDir() error {
+	if s.AppendOnly != "yes" {
+		return nil
+	}
+
+	return os.MkdirAll(filepath.Join(s.Dir, s.AppendDirname), 0755)
+}
+
+func (s *Store) EnsureAppendOnlyFile() error {
+	if s.AppendOnly != "yes" {
+		return nil
+	}
+
+	aofPath := filepath.Join(s.Dir, s.AppendDirname, s.AppendFilename+".1.incr.aof")
+	file, err := os.Create(aofPath)
+	if err != nil {
+		return err
+	}
+	file.Close()
+
+	manifestPath := filepath.Join(s.Dir, s.AppendDirname, s.AppendFilename+".manifest")
+	manifestFile, err := os.Create(manifestPath)
+	if err != nil {
+		return err
+	}
+	defer manifestFile.Close()
+
+	manifestContent := "file " + s.AppendFilename + ".1.incr.aof seq 1 type i\n"
+	_, err = manifestFile.WriteString(manifestContent)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *Store) Set(key, value string, expireAt time.Time) {

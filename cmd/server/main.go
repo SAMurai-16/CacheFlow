@@ -86,6 +86,14 @@ func main() {
 	// Create a single store instance for all connections
 	st := store.New(role, masterHost, masterPort, port, dir, dbfilename, appendonly, appenddirname, appendfilename, appendfsync)
 
+	if err := st.EnsureAppendOnlyDir(); err != nil {
+		fmt.Println("Failed to create append-only directory:", err)
+	}
+
+	if err := st.EnsureAppendOnlyFile(); err != nil {
+		fmt.Println("Failed to create append-only file:", err)
+	}
+
 	if err := st.LoadRDB(); err != nil {
 		fmt.Println("Failed to load RDB:", err)
 	}
